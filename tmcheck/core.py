@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import yaml
+import re
 
 
 class ModelError(Exception):
@@ -88,42 +89,39 @@ def validate(model: dict) -> list[Issue]:
     flows = model.get("flows", [])
     threats = model.get("threats", [])
 
-    zone_ids = set()
-    all_ids = set()
+    # Unified ID space check for DUPLICATE_ID across all sections
+    seen_ids = set()
+    duplicate_ids = set()
 
-    # Check zones
-    for z in zones:
-        if not isinstance(z, dict):
-            continue
-        zid = z.get("id")
-        if zid:
-            if zid in all_ids:
-                issues.add(Issue(ref=zid, code="DUPLICATE_ID"))
-            else:
-                all_ids.add(zid)
-                zone_ids.add(zid)
+    all_sections = [("zones", zones), ("elements", elements), ("flows", flows), ("threats", threats)]
+    for _, items in all_sections:
+        if isinstance(items, list):
+            for item in items:
+                if isinstance(item, dict):
+                    item_id = item.get("id")
+                    if item_id:
+                        if item_id in seen_ids:
+                            duplicate_ids.add(item_id)
+                        else:
+                            seen_ids.add(item_id)
 
-    element_ids = set()
-    element_kinds = {}
-    element_is_log = {}
+    for dup_id in duplicate_ids:
+        issues.add(Issue(ref=dup_id, code="DUPLICATE_ID"))
 
-    # Check elements
+    # Map existing valid entities for references
+    zone_ids = {z.get("id") for z in zones if isinstance(z, dict) and z.get("id")}
+    element_ids = {e.get("id") for e in elements if isinstance(e, dict) and e.get("id")}
+    element_kinds = {e.get("id"): e.get("kind") for e in elements if isinstance(e, dict) and e.get("id")}
+    element_is_log = {e.get("id"): e.get("is_log", False) for e in elements if isinstance(e, dict) and e.get("id")}
+    flow_ids = {f.get("id") for f in flows if isinstance(f, dict) and f.get("id")}
+
+    # Validate elements
     for e in elements:
         if not isinstance(e, dict):
             continue
         eid = e.get("id")
         kind = e.get("kind")
         zone = e.get("zone")
-        is_log = e.get("is_log", False)
-
-        if eid:
-            if eid in all_ids:
-                issues.add(Issue(ref=eid, code="DUPLICATE_ID"))
-            else:
-                all_ids.add(eid)
-                element_ids.add(eid)
-                element_kinds[eid] = kind
-                element_is_log[eid] = is_log
 
         if kind not in {"external_entity", "process", "data_store"}:
             if eid:
@@ -133,24 +131,13 @@ def validate(model: dict) -> list[Issue]:
             if eid:
                 issues.add(Issue(ref=eid, code="UNKNOWN_ZONE"))
 
-    flow_ids = set()
-    flow_endpoints = {}
-
-    # Check flows
+    # Validate flows
     for f in flows:
         if not isinstance(f, dict):
             continue
         fid = f.get("id")
         source = f.get("source")
         target = f.get("target")
-
-        if fid:
-            if fid in all_ids:
-                issues.add(Issue(ref=fid, code="DUPLICATE_ID"))
-            else:
-                all_ids.add(fid)
-                flow_ids.add(fid)
-                flow_endpoints[fid] = (source, target)
 
         if source not in element_ids or target not in element_ids:
             if fid:
@@ -164,10 +151,8 @@ def validate(model: dict) -> list[Issue]:
                 if src_kind != "process" and tgt_kind != "process":
                     issues.add(Issue(ref=fid, code="INVALID_FLOW"))
 
-    threat_ids = set()
+    # Validate threats
     valid_categories = set("STRIDE")
-
-    # Check threats
     for t in threats:
         if not isinstance(t, dict):
             continue
@@ -179,13 +164,6 @@ def validate(model: dict) -> list[Issue]:
         status = t.get("status")
         mitigation = t.get("mitigation")
         justification = t.get("justification")
-
-        if tid:
-            if tid in all_ids:
-                issues.add(Issue(ref=tid, code="DUPLICATE_ID"))
-            else:
-                all_ids.add(tid)
-                threat_ids.add(tid)
 
         if target not in element_ids and target not in flow_ids:
             if tid:
@@ -232,9 +210,11 @@ def validate(model: dict) -> list[Issue]:
 
 def crossing_flows(model: dict) -> list[str]:
     """Ids of flows whose source and target are in different zones, in file order."""
-    elements = {e["id"]: e.get("zone") for e in model.get("elements", []) if "id" in e}
+    elements = {e["id"]: e.get("zone") for e in model.get("elements", []) if isinstance(e, dict) and "id" in e}
     result = []
     for f in model.get("flows", []):
+        if not isinstance(f, dict):
+            continue
         fid = f.get("id")
         src = f.get("source")
         tgt = f.get("target")
@@ -246,42 +226,41 @@ def crossing_flows(model: dict) -> list[str]:
 
 def coverage_gaps(model: dict) -> list[Gap]:
     """(ref, category) pairs in scope with no threat recorded, sorted by ref then S, T, R, I, D, E."""
-    elements = {e["id"]: e for e in model.get("elements", []) if "id" in e}
+    elements = {e["id"]: e for e in model.get("elements", []) if isinstance(e, dict) and "id" in e}
     cross_flows = set(crossing_flows(model))
 
-    # In scope items: crossing flows + both of their end elements
     in_scope_items = set()
     for f in model.get("flows", []):
+        if not isinstance(f, dict):
+            continue
         fid = f.get("id")
         if fid in cross_flows:
             in_scope_items.add(fid)
-            in_scope_items.add(f.get("source"))
-            in_scope_items.add(f.get("target"))
+            if f.get("source"):
+                in_scope_items.add(f.get("source"))
+            if f.get("target"):
+                in_scope_items.add(f.get("target"))
 
-    # Map existing threats: target -> set of categories
     threat_map = {}
     for t in model.get("threats", []):
+        if not isinstance(t, dict):
+            continue
         target = t.get("target")
         cat = t.get("category")
         if target and cat:
             threat_map.setdefault(target, set()).add(cat)
 
     stride_order = ["S", "T", "R", "I", "D", "E"]
-    gaps = []
 
-    # Sort in_scope_items by natural/file order or standard sorting
-    # We will iterate in file order of elements and flows to preserve natural order
-    processed = set()
-    
-    # Check elements and flows in file order
     all_items_order = []
     for e in model.get("elements", []):
-        if e.get("id") in in_scope_items:
+        if isinstance(e, dict) and e.get("id") in in_scope_items:
             all_items_order.append((e["id"], "element"))
     for f in model.get("flows", []):
-        if f.get("id") in in_scope_items:
+        if isinstance(f, dict) and f.get("id") in in_scope_items:
             all_items_order.append((f["id"], "flow"))
 
+    gaps = []
     for ref, itype in all_items_order:
         if itype == "element":
             e = elements[ref]
@@ -307,14 +286,13 @@ def policy_findings(model: dict) -> list[Issue]:
     issues = set()
     cross_flows = set(crossing_flows(model))
 
-    element_zones = {e["id"]: e.get("zone") for e in model.get("elements", []) if "id" in e}
-    
-    # Get trust levels of zones
-    zone_trust = {z["id"]: z.get("trust", 0) for z in model.get("zones", []) if "id" in z}
+    element_zones = {e["id"]: e.get("zone") for e in model.get("elements", []) if isinstance(e, dict) and "id" in e}
+    zone_trust = {z["id"]: z.get("trust", 0) for z in model.get("zones", []) if isinstance(z, dict) and "id" in z}
 
-    # 1. UNENCRYPTED_CROSSING & UNAUTHENTICATED_INBOUND
     safe_protocols = {"https", "tls", "mtls", "sftp", "ssh"}
     for f in model.get("flows", []):
+        if not isinstance(f, dict):
+            continue
         fid = f.get("id")
         if fid in cross_flows:
             proto = str(f.get("protocol", "")).lower()
@@ -332,16 +310,17 @@ def policy_findings(model: dict) -> list[Issue]:
                 if not f.get("authenticated", False):
                     issues.add(Issue(ref=fid, code="UNAUTHENTICATED_INBOUND"))
 
-    # 2. PII_STORE_WITHOUT_I_THREAT
     threat_map = {}
     for t in model.get("threats", []):
+        if not isinstance(t, dict):
+            continue
         target = t.get("target")
         cat = t.get("category")
         if target and cat:
             threat_map.setdefault(target, set()).add(cat)
 
     for e in model.get("elements", []):
-        if e.get("kind") == "data_store" and e.get("holds_pii", False):
+        if isinstance(e, dict) and e.get("kind") == "data_store" and e.get("holds_pii", False):
             eid = e.get("id")
             if eid:
                 cats = threat_map.get(eid, set())
@@ -355,6 +334,8 @@ def rank(model: dict) -> list[RankedThreat]:
     """Open threats with valid scores, by score desc, then impact desc, then natural id order."""
     ranked = []
     for t in model.get("threats", []):
+        if not isinstance(t, dict):
+            continue
         if t.get("status") == "open":
             likelihood = t.get("likelihood")
             impact = t.get("impact")
@@ -371,17 +352,13 @@ def rank(model: dict) -> list[RankedThreat]:
                     "id": t.get("id"),
                     "score": score,
                     "impact": impact,
-                    "level": level,
-                    "raw_id": t.get("id")
+                    "level": level
                 })
 
-    # Custom natural sort key for IDs like T2 before T10
     def natural_sort_key(item):
-        import re
         parts = re.split(r'(\d+)', item["id"])
         return [int(p) if p.isdigit() else p for p in parts]
 
-    # Sort by score desc, then impact desc, then natural id order
     ranked.sort(key=lambda x: (-x["score"], -x["impact"], natural_sort_key(x)))
 
     return [RankedThreat(id=r["id"], score=r["score"], level=r["level"]) for r in ranked]
