@@ -24,7 +24,7 @@ flows:
   - {id: f05, source: scorer, target: case_db, data: [flag, explanation], protocol: tls, authenticated: true}
   - {id: f06, source: scorer, target: audit_log, data: [decision_record], protocol: tls, authenticated: true}
   - {id: f07, source: analyst, target: analyst_console, data: [case_decision], protocol: https, authenticated: true}
-  - {id: f08, source: analyst_console, target: case_db, data: [case_decision, customer_pii], protocol: postgres, authenticated: true}
+  - {id: f08, source: analyst_console, target: case_db, data: [case_decision, customer_pii], protocol: tls, authenticated: true}
 threats:
   - id: T1
     target: f01
@@ -83,3 +83,15 @@ threats:
   - {id: T24, target: scorer, category: R, title: Scorer cannot show which model version produced a past flag, likelihood: 3, impact: 4, status: open}
   - {id: T25, target: scorer, category: D, title: Crafted transfer graph with huge fan-out makes scoring take seconds, likelihood: 2, impact: 4, status: open}
   - {id: T26, target: case_db, category: D, title: Case database fills its disk during a scam wave and stops accepting flags, likelihood: 2, impact: 4, status: open}
+  - {id: T27, target: scorer, category: E, title: Malicious actor exploits scoring error handling flaws improperly, likelihood: 2, impact: 4, status: open}
+  - {id: T28, target: analyst_console, category: S, title: Unauthorized access to analyst console session by malicious internal user, likelihood: 2, impact: 4, status: open}
+  - {id: T29, target: analyst_console, category: T, title: Analyst console decision data altered in transit internally by attacker, likelihood: 2, impact: 4, status: open}
+  - {id: T30, target: analyst_console, category: R, title: Analyst denies taking action on critical mule account fraud alert review, likelihood: 3, impact: 3, status: open}
+  - {id: T31, target: analyst_console, category: I, title: Sensitive fraud investigation notes exposed on the analyst console screen, likelihood: 2, impact: 4, status: open}
+  - {id: T32, target: analyst_console, category: D, title: Denial of service attack floods analyst console interface with fake alerts, likelihood: 2, impact: 3, status: open}
+  - {id: T33, target: analyst_console, category: E, title: Elevation of privilege vulnerability allows regular analyst root access, likelihood: 1, impact: 5, status: open}
+  - {id: T34, target: case_db, category: T, title: Tampering with customer case records stored inside the core database, likelihood: 2, impact: 5, status: open}
+  - {id: T35, target: f08, category: T, title: Case decision records modified maliciously while traveling over network, likelihood: 2, impact: 4, status: open}
+  - {id: T36, target: f08, category: I, title: Customer personal identifiable information sniffed on the database link, likelihood: 2, impact: 4, status: open}
+  - {id: T37, target: f08, category: D, title: Flooding the database channel with heavy traffic causes connection timeout, likelihood: 2, impact: 3, status: open}
+  - {id: T38, target: feature_store, category: I, title: Unauthorized data extraction of customer feature store information, likelihood: 2, impact: 5, status: open}
